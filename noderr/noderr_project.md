@@ -34,13 +34,13 @@
 
 ### 3. MVP Implementation Status
 
-**MVP Completion: 83% (15 of 18 total NodeIDs implemented)**
+**MVP Completion: 89% (16 of 18 total NodeIDs implemented)**
 
 | Feature | Existing NodeIDs | Missing NodeIDs |
 |---------|-----------------|-----------------|
 | Environment Setup | UTIL_RunWrapper, SVC_SetupEnvironment | — |
 | Authentication | AUTH_Manager | — |
-| Browser Automation | SVC_BrowserSession, UTIL_BrowserUtils, SVC_AskQuestion | SVC_RetryLogic |
+| Browser Automation | SVC_BrowserSession, UTIL_BrowserUtils, SVC_AskQuestion, SVC_RetryLogic | — |
 | Notebook Management | SVC_NotebookManager | — |
 | Data Storage | DATA_NotebookLibrary, DATA_AuthInfo, DATA_BrowserState | — |
 | Configuration | CONFIG_Settings, CONFIG_SkillDefinition, CONFIG_Requirements, SVC_SkillInit | — |
@@ -50,7 +50,6 @@
 **Missing for MVP Completion:**
 *   `TEST_AuthFlow` — Automated test for authentication setup and verification workflow
 *   `TEST_QueryFlow` — End-to-end automated test for querying a NotebookLM notebook
-*   `SVC_RetryLogic` — Dedicated retry/recovery logic for browser crashes and rate limits (currently manual workaround via cleanup_manager.py)
 
 ---
 

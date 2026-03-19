@@ -154,19 +154,19 @@ graph TD
 | UTIL_RunWrapper | Utility | scripts/run.py | VERIFIED |
 | SVC_SetupEnvironment | Service | scripts/setup_environment.py | VERIFIED |
 | AUTH_Manager | Auth | scripts/auth_manager.py | VERIFIED |
-| SVC_AskQuestion | Service | scripts/ask_question.py | WIP |
+| SVC_AskQuestion | Service | scripts/ask_question.py | VERIFIED |
 | SVC_NotebookManager | Service | scripts/notebook_manager.py | VERIFIED |
 | SVC_BrowserSession | Service | scripts/browser_session.py | VERIFIED |
 | UTIL_BrowserUtils | Utility | scripts/browser_utils.py | VERIFIED |
 | SVC_CleanupManager | Service | scripts/cleanup_manager.py | VERIFIED |
-| CONFIG_Settings | Config | scripts/config.py | WIP |
+| CONFIG_Settings | Config | scripts/config.py | VERIFIED |
 | SVC_SkillInit | Service | scripts/__init__.py | VERIFIED |
 | DATA_NotebookLibrary | Data | data/library.json | VERIFIED |
 | DATA_AuthInfo | Data | data/auth_info.json | VERIFIED |
 | DATA_BrowserState | Data | data/browser_state/ | VERIFIED |
 | CONFIG_SkillDefinition | Config | SKILL.md | VERIFIED |
 | CONFIG_Requirements | Config | requirements.txt | VERIFIED |
-| SVC_RetryLogic | Service | scripts/retry_logic.py | WIP |
+| SVC_RetryLogic | Service | scripts/retry_logic.py | VERIFIED |
 
 ### Missing for MVP (2)
 

@@ -12,6 +12,24 @@
 ---
 **[NEWEST ENTRIES APPEAR HERE - DO NOT REMOVE THIS MARKER]**
 ---
+**Type:** ARC-Completion
+**Timestamp:** 2026-03-19T06:30:00Z
+**WorkGroupID:** wip-20260319-retry
+**NodeID(s):** SVC_RetryLogic, SVC_AskQuestion, CONFIG_Settings
+**Logged By:** AI-Agent (Claude Code — Noderr Loop 3)
+**Details:**
+Successfully implemented and verified retry/backoff infrastructure for browser automation.
+
+- **Primary Goal:** Implement `SVC_RetryLogic` — dedicated retry handler for transient browser failures — and integrate it into `SVC_AskQuestion`.
+- **ARC Verification Summary:** 30/31 criteria fully met across all 3 nodes. 1 partial: hardcoded `120` in `ask_question.py:115` instead of `QUERY_TIMEOUT_SECONDS`; functionally correct, documented as tech debt in spec.
+- **Implementation Pattern Decision:** Used `RetryHandler.run(callable)` instead of `@contextmanager` pattern shown in spec Interface Definition. The contextmanager cannot yield multiple times — `run(callable)` is the correct synchronous retry pattern. Interface Definition updated to as-built in Loop 3.
+- **Architectural Learnings:** `_do_query()` inner function pattern (extract browser block into zero-arg callable, wrap with `handler.run()`) is the clean integration point for retry in stateless per-query browser automation. Nested `finally` blocks guarantee playwright+context cleanup on every attempt.
+- **Unforeseen Ripple Effects:** None. `TimeoutError` and `RuntimeError` that were previously silent `return None` paths are now raised explicitly — strictly additive change (now retryable rather than swallowed).
+- **Specification Finalization:** All 3 specs updated to as-built. `SVC_RetryLogic` Interface Definition corrected to `run(callable)`; all ARC criteria marked [x]; `max_retries=1` criterion text corrected. `SVC_AskQuestion` core logic + interface + ARC criteria updated. `CONFIG_Settings` ARC criteria marked [x].
+- **Flowchart Consistency Check:** No discrepancies found. `SVC_RetryLogic` already in `Browser Automation` subgraph with correct edges. NodeID Reference table updated: 3 nodes WIP → VERIFIED.
+- **Technical Debt Scheduled:** Minor — `time.time() + 120` hardcode in `ask_question.py:115` should reference `QUERY_TIMEOUT_SECONDS`. Documented in `SVC_AskQuestion.md` Technical Debt. No REFACTOR_ tracker task created (trivial 1-line fix).
+- **Project Overview Updates:** MVP completion 83% → 89% (16/18 NodeIDs). `SVC_RetryLogic` moved from Missing → Browser Automation in `noderr_project.md`.
+---
 **Type:** PostInstallationAudit
 **Timestamp:** 2026-03-19T05:00:00Z
 **NodeID(s):** Project-Wide

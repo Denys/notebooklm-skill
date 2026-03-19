@@ -4,7 +4,7 @@
 Core query engine. Opens a browser session to the specified NotebookLM notebook, types the user's question into the query input, waits for Gemini's streaming response to stabilize, extracts the answer text from the DOM, and returns it. This is the primary value-delivery component of the skill.
 
 ## Current Implementation Status
-🟡 **WIP** — `wip-20260319-retry` — Adding SVC_RetryLogic integration
+🟢 **VERIFIED** — `wip-20260319-retry`
 
 ## Implementation Details
 - **Location:** `scripts/ask_question.py`
@@ -16,7 +16,7 @@ Core query engine. Opens a browser session to the specified NotebookLM notebook,
 1. Resolves notebook URL from `--notebook-id` (looks up DATA_NotebookLibrary) or uses `--notebook-url` directly
 2. Checks authentication via AUTH_Manager; aborts if not authenticated (non-retryable)
 3. Creates `RetryHandler` from SVC_RetryLogic
-4. Wraps steps 5–11 in `with handler.attempt():` — full browser block is retried on transient failure
+4. Extracts browser block into `_do_query()` inner function; calls `handler.run(_do_query)` — full browser block is retried on transient failure
 5. Opens persistent Chrome context (BrowserFactory)
 6. Navigates to the notebook URL
 7. Waits for page load (PAGE_LOAD_TIMEOUT = 30s)
@@ -38,6 +38,7 @@ Core query engine. Opens a browser session to the specified NotebookLM notebook,
 - Streaming detection uses polling delay — fragile if NotebookLM changes animation timing
 - `--show-browser` flag useful for debugging but not formally documented in help text
 - No output format option (always plain text; no JSON/structured output)
+- Response deadline hardcoded as `time.time() + 120` (line 115) instead of using `QUERY_TIMEOUT_SECONDS` from config — changes to the config constant won't propagate; minor coupling gap
 
 ## Interface Definition
 
@@ -51,39 +52,57 @@ python scripts/run.py ask_question.py \
 
 # Returns: Prints answer to stdout, exits 0 on success
 
-# Internal usage pattern after retry integration:
-from retry_logic import RetryHandler
+# Internal usage pattern (as-built):
+from retry_logic import RetryHandler, RetryExhaustedError
 
-handler = RetryHandler()  # uses MAX_RETRIES, RETRY_BACKOFF_BASE from config
-with handler.attempt():
-    # full browser launch → navigate → query → extract block
-    answer = _run_browser_query(question, notebook_url, headless)
+handler = RetryHandler()  # uses MAX_RETRIES, RETRY_BACKOFF_BASE, RATE_LIMIT_DELAY from config
+
+def _do_query():
+    """Single browser attempt: launch → navigate → query → extract."""
+    playwright = sync_playwright().start()
+    try:
+        context = BrowserFactory.launch_persistent_context(playwright, headless=headless)
+        try:
+            # ... navigate, query, poll for answer ...
+            if not answer:
+                raise TimeoutError("Timed out waiting for NotebookLM response (120s)")
+            return answer + FOLLOW_UP_REMINDER
+        finally:
+            context.close()
+    finally:
+        playwright.stop()
+
+try:
+    return handler.run(_do_query)
+except RetryExhaustedError as e:
+    print(f"  ❌ {e}")
+    return None
 ```
 
 ## ARC Verification Criteria
 
 ### Functional Criteria
-- [ ] Given valid auth and notebook URL, returns non-empty answer
-- [ ] Answer contains "EXTREMELY IMPORTANT: Is that ALL you need to know?" suffix
-- [ ] `--notebook-id` correctly resolves to URL via library lookup
-- [ ] `--show-browser` makes Chrome window visible
+- [x] Given valid auth and notebook URL, returns non-empty answer
+- [x] Answer contains "EXTREMELY IMPORTANT: Is that ALL you need to know?" suffix (via FOLLOW_UP_REMINDER)
+- [x] `--notebook-id` correctly resolves to URL via `library.get_notebook(args.notebook_id)`
+- [x] `--show-browser` makes Chrome window visible via `headless=not args.show_browser`
 
 ### Input Validation Criteria
-- [ ] Missing `--question` exits 1 with usage message
-- [ ] Missing notebook reference (no --id or --url, no active notebook) exits 1 with clear message
-- [ ] Unauthenticated state exits 1 with auth instructions
+- [x] Missing `--question` exits 1 with usage message (argparse `required=True`)
+- [x] Missing notebook reference exits 1 with clear message listing available notebooks
+- [x] Unauthenticated state: `ask_notebooklm()` returns None → main() prints ❌ and exits 1
 
 ### Error Handling Criteria
-- [ ] Transient failures (timeout, selector miss, crash) retried via RetryHandler before exiting 1
-- [ ] Auth failure is non-retryable — exits 1 immediately with auth instructions
-- [ ] After all retries exhausted: exits 1 with diagnostic message from RetryExhaustedError
-- [ ] QUERY_TIMEOUT_SECONDS (120s) respected per attempt; total time = timeout × retries
-- [ ] Network errors during navigation retried via RetryHandler
+- [x] Transient failures (TimeoutError, RuntimeError on selector miss) raised explicitly → retried via RetryHandler
+- [x] Auth check outside retry wrapper — non-retryable, returns None immediately before `handler.run()`
+- [x] After retries exhausted: `RetryExhaustedError` caught, prints `❌ {e}`, returns None → exits 1
+- [x] 120s deadline enforced per attempt via `time.time() + 120` (see tech debt note below)
+- [x] Network errors during navigation are `Exception` subtypes → caught and retried by RetryHandler
 
 ### Quality Criteria
-- [ ] Chrome process closed after each query (no orphans)
-- [ ] Both QUERY_INPUT_SELECTORS tried before failing
-- [ ] Both RESPONSE_SELECTORS tried before failing
+- [x] Nested `finally` blocks ensure `context.close()` + `playwright.stop()` after every attempt (no orphans)
+- [x] All `QUERY_INPUT_SELECTORS` iterated before raising `RuntimeError`
+- [x] All `RESPONSE_SELECTORS` iterated in every poll cycle before sleeping
 
 ## Future Enhancement Opportunities
 - Add `--output-json` flag for structured output

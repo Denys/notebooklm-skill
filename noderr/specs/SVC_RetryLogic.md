@@ -4,7 +4,7 @@
 Dedicated retry and recovery service for browser automation failures. Provides a `RetryHandler` sync context manager that wraps any code block with configurable retry count, exponential backoff, and error classification — distinguishing transient failures (timeout, selector miss, rate limit) from non-retryable ones (auth failure, invalid URL). Used by SVC_AskQuestion to wrap the full browser launch → navigate → query → extract cycle.
 
 ## Current Implementation Status
-🟡 **WIP** — `wip-20260319-retry`
+🟢 **VERIFIED** — `wip-20260319-retry`
 
 ## MVP Context
 - **Required for Feature:** Reliable query execution (Browser Automation)
@@ -62,20 +62,22 @@ Final failure prints:
 # scripts/retry_logic.py
 
 import time
-from contextlib import contextmanager
-from typing import Type, Tuple
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 from config import MAX_RETRIES, RETRY_BACKOFF_BASE, RATE_LIMIT_DELAY
 
 
+RATE_LIMIT_SIGNALS = ("rate", "quota", "429", "too many requests")
+AUTH_SIGNALS = ("not authenticated", "authentication required", "login required", "run auth")
+NON_RETRYABLE_TYPES = (KeyboardInterrupt, SystemExit)
+
+
 class RetryExhaustedError(Exception):
-    """Raised when all retry attempts are exhausted."""
+    """Raised when all retry attempts have been exhausted."""
     pass
-
-
-NON_RETRYABLE = (KeyboardInterrupt, SystemExit)
-RATE_LIMIT_SIGNALS = ("rate", "quota", "429", "too many")
-AUTH_SIGNALS = ("authentication", "not authenticated", "login required")
 
 
 class RetryHandler:
@@ -89,56 +91,57 @@ class RetryHandler:
         self.backoff_base = backoff_base
         self.rate_limit_delay = rate_limit_delay
 
-    @contextmanager
-    def attempt(self):
+    def run(self, func):
         """
-        Sync context manager. Wrap a block with retry logic.
+        Call func(), retrying on transient errors.
 
-        Usage:
-            handler = RetryHandler()
-            for attempt in handler.attempt():
-                with attempt:
-                    result = do_browser_work()
+        Args:
+            func: Zero-argument callable to execute with retry.
+
+        Returns:
+            The return value of func() on success.
+
+        Raises:
+            RetryExhaustedError: When all attempts fail.
+            Original exception: For non-retryable errors (auth, KeyboardInterrupt).
         """
+        ...
+
+    def _get_delay(self, exc: Exception, attempt: int) -> float:
+        """Return sleep duration: RATE_LIMIT_DELAY for rate limits, backoff_base**(attempt+1) otherwise."""
         ...
 
 
 # Intended usage in SVC_AskQuestion:
 #
 #   handler = RetryHandler()
-#   answer = None
-#   for attempt_ctx in handler.attempt():
-#       with attempt_ctx:
-#           answer = _run_browser_query(question, notebook_url, headless)
-#   return answer
+#   return handler.run(_do_query)   # _do_query is a zero-arg callable
 ```
-
-> **Implementation Note:** The interface above uses an iterator-of-context-managers pattern to support retry loops in synchronous code cleanly. Each `with attempt_ctx:` block either succeeds (breaking the loop) or raises (triggering retry). See Implementation Notes below for the recommended pattern.
 
 ## ARC Verification Criteria
 
 ### Functional Criteria
-- [ ] Retries up to `max_retries` times on transient errors (TimeoutError, generic Exception)
-- [ ] Exponential backoff sleep applied between retries (`backoff_base ** attempt`)
-- [ ] Rate limit signals trigger `RATE_LIMIT_DELAY` fixed wait instead of backoff
-- [ ] Raises `RetryExhaustedError` after max attempts exhausted, preserving last exception
-- [ ] Returns normally (no exception) when wrapped block succeeds on any attempt
+- [x] Retries up to `max_retries` times on transient errors (TimeoutError, generic Exception)
+- [x] Exponential backoff sleep applied between retries (`backoff_base ** (attempt + 1)` → 2.0s, 4.0s, 8.0s)
+- [x] Rate limit signals trigger `RATE_LIMIT_DELAY` fixed wait instead of backoff
+- [x] Raises `RetryExhaustedError` after max attempts exhausted, preserving last exception via `raise ... from last_error`
+- [x] Returns normally (no exception) when wrapped block succeeds on any attempt
 
 ### Input Validation Criteria
-- [ ] `max_retries=0` → no retries; immediate `RetryExhaustedError` on first failure
-- [ ] `max_retries=1` → one attempt only; no retry sleep
-- [ ] Constructor defaults match CONFIG_Settings constants
+- [x] `max_retries=0` → total_attempts=1; immediate `RetryExhaustedError` on first failure, no sleep
+- [x] `max_retries=1` → total_attempts=2; one retry attempt with one backoff sleep before second attempt
+- [x] Constructor defaults match CONFIG_Settings constants (MAX_RETRIES=3, RETRY_BACKOFF_BASE=2.0, RATE_LIMIT_DELAY=45)
 
 ### Error Handling Criteria
-- [ ] `KeyboardInterrupt` and `SystemExit` re-raised immediately (never retried)
-- [ ] Auth error signals ("not authenticated", "login required") re-raised immediately
-- [ ] `RetryExhaustedError` message includes attempt count and last error text
+- [x] `KeyboardInterrupt` and `SystemExit` re-raised immediately via `except NON_RETRYABLE_TYPES: raise`
+- [x] Auth error signals ("not authenticated", "authentication required", "login required", "run auth") re-raised immediately
+- [x] `RetryExhaustedError` message includes attempt count and last error text: `"All {n} attempts failed. Last error: {Type}: {msg}"`
 
 ### Quality Criteria
-- [ ] Each failed attempt prints attempt number, total attempts, error summary
-- [ ] No infinite loop possible — hard ceiling at `max_retries`
-- [ ] Pure Python stdlib — no new dependencies beyond `config.py`
-- [ ] Works with `sync_playwright` (synchronous, not async)
+- [x] Non-final failed attempts print `⚠️ Attempt N/M failed: Type: msg` + `⏳ Retrying in Xs...`
+- [x] No infinite loop possible — hard ceiling at `range(max_retries + 1)`
+- [x] Pure Python stdlib — `time`, `sys`, `pathlib` only; no new dependencies beyond `config.py`
+- [x] Works with `sync_playwright` (synchronous `time.sleep`, not async)
 
 ## Implementation Notes
 

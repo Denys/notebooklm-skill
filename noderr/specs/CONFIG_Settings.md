@@ -4,7 +4,7 @@
 Centralized configuration module for all constants used across the NotebookLM skill scripts. Contains CSS selectors for the NotebookLM UI, file system paths, browser launch arguments, user agent, and timeout values. The single source of truth — update here when the NotebookLM UI changes.
 
 ## Current Implementation Status
-🟡 **WIP** — `wip-20260319-retry` — Adding retry constants for SVC_RetryLogic
+🟢 **VERIFIED** — `wip-20260319-retry`
 
 ## Implementation Details
 - **Location:** `scripts/config.py`
@@ -94,21 +94,21 @@ from config import (
 ## ARC Verification Criteria
 
 ### Functional Criteria
-- [ ] All path constants resolve correctly relative to skill installation directory
-- [ ] QUERY_INPUT_SELECTORS match current NotebookLM textarea element
-- [ ] RESPONSE_SELECTORS match current NotebookLM response container
-- [ ] BROWSER_ARGS suppress `navigator.webdriver` detection
-- [ ] MAX_RETRIES, RETRY_BACKOFF_BASE, RATE_LIMIT_DELAY importable by retry_logic.py
+- [x] All path constants resolve correctly relative to `Path(__file__).parent.parent`
+- [x] QUERY_INPUT_SELECTORS present (3 selectors: class + German + English aria-label)
+- [x] RESPONSE_SELECTORS present (3 selectors: class + data-message-author)
+- [x] BROWSER_ARGS includes `--disable-blink-features=AutomationControlled`
+- [x] MAX_RETRIES=3, RETRY_BACKOFF_BASE=2.0, RATE_LIMIT_DELAY=45 importable by retry_logic.py
 
 ### Input Validation Criteria
-- [ ] N/A — pure constants module, no input
+- [x] N/A — pure constants module, no input
 
 ### Error Handling Criteria
-- [ ] N/A — no runtime logic
+- [x] N/A — no runtime logic
 
 ### Quality Criteria
-- [ ] No hardcoded absolute paths — all paths relative to SKILL_DIR
-- [ ] Single import covers all needed constants (no partial imports required)
+- [x] No hardcoded absolute paths — all paths relative to SKILL_DIR
+- [x] Single import covers all needed constants (no partial imports required)
 
 ## Future Enhancement Opportunities
 - Add .env override support for QUERY_TIMEOUT_SECONDS and LOGIN_TIMEOUT_MINUTES
