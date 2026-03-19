@@ -24,6 +24,7 @@ from auth_manager import AuthManager
 from notebook_manager import NotebookLibrary
 from config import QUERY_INPUT_SELECTORS, RESPONSE_SELECTORS
 from browser_utils import BrowserFactory, StealthUtils
+from retry_logic import RetryHandler, RetryExhaustedError
 
 
 # Follow-up reminder (adapted from MCP server for stateless operation)
@@ -58,133 +59,121 @@ def ask_notebooklm(question: str, notebook_url: str, headless: bool = True) -> s
     print(f"💬 Asking: {question}")
     print(f"📚 Notebook: {notebook_url}")
 
-    playwright = None
-    context = None
-
-    try:
-        # Start playwright
+    def _do_query():
+        """Single browser attempt: launch → navigate → query → extract."""
         playwright = sync_playwright().start()
-
-        # Launch persistent browser context using factory
-        context = BrowserFactory.launch_persistent_context(
-            playwright,
-            headless=headless
-        )
-
-        # Navigate to notebook
-        page = context.new_page()
-        print("  🌐 Opening notebook...")
-        page.goto(notebook_url, wait_until="domcontentloaded")
-
-        # Wait for NotebookLM
-        page.wait_for_url(re.compile(r"^https://notebooklm\.google\.com/"), timeout=10000)
-
-        # Wait for query input (MCP approach)
-        print("  ⏳ Waiting for query input...")
-        query_element = None
-
-        for selector in QUERY_INPUT_SELECTORS:
+        try:
+            context = BrowserFactory.launch_persistent_context(
+                playwright,
+                headless=headless
+            )
             try:
-                query_element = page.wait_for_selector(
-                    selector,
-                    timeout=10000,
-                    state="visible"  # Only check visibility, not disabled!
-                )
-                if query_element:
-                    print(f"  ✓ Found input: {selector}")
-                    break
-            except:
-                continue
+                page = context.new_page()
+                print("  🌐 Opening notebook...")
+                page.goto(notebook_url, wait_until="domcontentloaded")
 
-        if not query_element:
-            print("  ❌ Could not find query input")
-            return None
+                # Wait for NotebookLM
+                page.wait_for_url(re.compile(r"^https://notebooklm\.google\.com/"), timeout=10000)
 
-        # Type question (human-like, fast)
-        print("  ⏳ Typing question...")
-        
-        # Use primary selector for typing
-        input_selector = QUERY_INPUT_SELECTORS[0]
-        StealthUtils.human_type(page, input_selector, question)
+                # Wait for query input
+                print("  ⏳ Waiting for query input...")
+                query_element = None
 
-        # Submit
-        print("  📤 Submitting...")
-        page.keyboard.press("Enter")
+                for selector in QUERY_INPUT_SELECTORS:
+                    try:
+                        query_element = page.wait_for_selector(
+                            selector,
+                            timeout=10000,
+                            state="visible"
+                        )
+                        if query_element:
+                            print(f"  ✓ Found input: {selector}")
+                            break
+                    except:
+                        continue
 
-        # Small pause
-        StealthUtils.random_delay(500, 1500)
+                if not query_element:
+                    raise RuntimeError("Could not find query input — selector not found")
 
-        # Wait for response (MCP approach: poll for stable text)
-        print("  ⏳ Waiting for answer...")
+                # Type question (human-like, fast)
+                print("  ⏳ Typing question...")
+                input_selector = QUERY_INPUT_SELECTORS[0]
+                StealthUtils.human_type(page, input_selector, question)
 
-        answer = None
-        stable_count = 0
-        last_text = None
-        deadline = time.time() + 120  # 2 minutes timeout
+                # Submit
+                print("  📤 Submitting...")
+                page.keyboard.press("Enter")
 
-        while time.time() < deadline:
-            # Check if NotebookLM is still thinking (most reliable indicator)
-            try:
-                thinking_element = page.query_selector('div.thinking-message')
-                if thinking_element and thinking_element.is_visible():
+                StealthUtils.random_delay(500, 1500)
+
+                # Wait for response (poll for stable text)
+                print("  ⏳ Waiting for answer...")
+
+                answer = None
+                stable_count = 0
+                last_text = None
+                deadline = time.time() + 120  # 2 minutes timeout
+
+                while time.time() < deadline:
+                    try:
+                        thinking_element = page.query_selector('div.thinking-message')
+                        if thinking_element and thinking_element.is_visible():
+                            time.sleep(1)
+                            continue
+                    except:
+                        pass
+
+                    for selector in RESPONSE_SELECTORS:
+                        try:
+                            elements = page.query_selector_all(selector)
+                            if elements:
+                                latest = elements[-1]
+                                text = latest.inner_text().strip()
+                                if text:
+                                    if text == last_text:
+                                        stable_count += 1
+                                        if stable_count >= 3:
+                                            answer = text
+                                            break
+                                    else:
+                                        stable_count = 0
+                                        last_text = text
+                        except:
+                            continue
+
+                    if answer:
+                        break
+
                     time.sleep(1)
-                    continue
+
+                if not answer:
+                    raise TimeoutError("Timed out waiting for NotebookLM response (120s)")
+
+                print("  ✅ Got answer!")
+                return answer + FOLLOW_UP_REMINDER
+
+            finally:
+                try:
+                    context.close()
+                except:
+                    pass
+        finally:
+            try:
+                playwright.stop()
             except:
                 pass
 
-            # Try to find response with MCP selectors
-            for selector in RESPONSE_SELECTORS:
-                try:
-                    elements = page.query_selector_all(selector)
-                    if elements:
-                        # Get last (newest) response
-                        latest = elements[-1]
-                        text = latest.inner_text().strip()
-
-                        if text:
-                            if text == last_text:
-                                stable_count += 1
-                                if stable_count >= 3:  # Stable for 3 polls
-                                    answer = text
-                                    break
-                            else:
-                                stable_count = 0
-                                last_text = text
-                except:
-                    continue
-
-            if answer:
-                break
-
-            time.sleep(1)
-
-        if not answer:
-            print("  ❌ Timeout waiting for answer")
-            return None
-
-        print("  ✅ Got answer!")
-        # Add follow-up reminder to encourage Claude to ask more questions
-        return answer + FOLLOW_UP_REMINDER
-
+    handler = RetryHandler()
+    try:
+        return handler.run(_do_query)
+    except RetryExhaustedError as e:
+        print(f"  ❌ {e}")
+        return None
     except Exception as e:
         print(f"  ❌ Error: {e}")
         import traceback
         traceback.print_exc()
         return None
-
-    finally:
-        # Always clean up
-        if context:
-            try:
-                context.close()
-            except:
-                pass
-
-        if playwright:
-            try:
-                playwright.stop()
-            except:
-                pass
 
 
 def main():
