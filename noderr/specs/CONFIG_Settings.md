@@ -4,13 +4,13 @@
 Centralized configuration module for all constants used across the NotebookLM skill scripts. Contains CSS selectors for the NotebookLM UI, file system paths, browser launch arguments, user agent, and timeout values. The single source of truth — update here when the NotebookLM UI changes.
 
 ## Current Implementation Status
-✅ **IMPLEMENTED** — Component exists and is functional
+🟡 **WIP** — `wip-20260319-retry` — Adding retry constants for SVC_RetryLogic
 
 ## Implementation Details
 - **Location:** `scripts/config.py`
 - **Current interfaces:** Python module imported by all scripts that need configuration
 - **Dependencies:** `pathlib.Path` (stdlib only)
-- **Dependents:** AUTH_Manager, SVC_AskQuestion, SVC_BrowserSession, SVC_NotebookManager, SVC_CleanupManager, DATA_NotebookLibrary, DATA_AuthInfo, DATA_BrowserState
+- **Dependents:** AUTH_Manager, SVC_AskQuestion, SVC_BrowserSession, SVC_NotebookManager, SVC_CleanupManager, DATA_NotebookLibrary, DATA_AuthInfo, DATA_BrowserState, SVC_RetryLogic
 
 ## Core Logic & Functionality
 
@@ -58,6 +58,13 @@ QUERY_TIMEOUT_SECONDS = 120
 PAGE_LOAD_TIMEOUT = 30000  # ms
 ```
 
+### Retry Configuration
+```python
+MAX_RETRIES = 3          # Total attempts = 1 + MAX_RETRIES
+RETRY_BACKOFF_BASE = 2.0 # Exponential backoff: base ** attempt_number (seconds)
+RATE_LIMIT_DELAY = 45    # Fixed wait (seconds) when rate limit detected
+```
+
 ## Current Quality Assessment
 - **Completeness:** Covers all configuration needed by current scripts
 - **Code Quality:** Clean, flat module with no logic — pure constants
@@ -79,7 +86,8 @@ from config import (
     STATE_FILE, AUTH_INFO_FILE, LIBRARY_FILE,
     QUERY_INPUT_SELECTORS, RESPONSE_SELECTORS,
     BROWSER_ARGS, USER_AGENT,
-    LOGIN_TIMEOUT_MINUTES, QUERY_TIMEOUT_SECONDS, PAGE_LOAD_TIMEOUT
+    LOGIN_TIMEOUT_MINUTES, QUERY_TIMEOUT_SECONDS, PAGE_LOAD_TIMEOUT,
+    MAX_RETRIES, RETRY_BACKOFF_BASE, RATE_LIMIT_DELAY
 )
 ```
 
@@ -90,6 +98,7 @@ from config import (
 - [ ] QUERY_INPUT_SELECTORS match current NotebookLM textarea element
 - [ ] RESPONSE_SELECTORS match current NotebookLM response container
 - [ ] BROWSER_ARGS suppress `navigator.webdriver` detection
+- [ ] MAX_RETRIES, RETRY_BACKOFF_BASE, RATE_LIMIT_DELAY importable by retry_logic.py
 
 ### Input Validation Criteria
 - [ ] N/A — pure constants module, no input

@@ -1,79 +1,191 @@
 # SVC_RetryLogic.md
 
 ## Purpose
-Dedicated retry and recovery service for browser automation failures. Handles transient errors such as Chrome crashes, selector timeouts, rate limit responses from NotebookLM, and network interruptions — currently managed manually via cleanup_manager.py + auth_manager.py reauth.
+Dedicated retry and recovery service for browser automation failures. Provides a `RetryHandler` sync context manager that wraps any code block with configurable retry count, exponential backoff, and error classification — distinguishing transient failures (timeout, selector miss, rate limit) from non-retryable ones (auth failure, invalid URL). Used by SVC_AskQuestion to wrap the full browser launch → navigate → query → extract cycle.
 
 ## Current Implementation Status
-⚪ **PLANNED** — Required for MVP completion
+🟡 **WIP** — `wip-20260319-retry`
 
 ## MVP Context
 - **Required for Feature:** Reliable query execution (Browser Automation)
 - **Priority:** High — affects core reliability of every query
-- **Blocking:** Nothing blocked (SVC_AskQuestion works without it, just not robustly)
+- **Blocking:** Nothing currently blocked (SVC_AskQuestion works without it, but fails silently on transient errors)
 
-## Planned Implementation Details
-- **Intended Location:** `scripts/retry_logic.py`
-- **Required Interfaces:** `RetryHandler` class with configurable retry count and backoff; callable from SVC_AskQuestion and AUTH_Manager
-- **Dependencies:** SVC_BrowserSession, SVC_CleanupManager, CONFIG_Settings
-- **Dependents:** SVC_AskQuestion (wrap query in retry), AUTH_Manager (retry auth on transient failure)
+## Implementation Details
+- **Location:** `scripts/retry_logic.py`
+- **Current interfaces:** `RetryHandler` class; used as a sync context manager via `with handler.attempt():`
+- **Dependencies:** `CONFIG_Settings` (MAX_RETRIES, RETRY_BACKOFF_BASE, RATE_LIMIT_DELAY constants)
+- **Dependents:** `SVC_AskQuestion` (wraps full query block)
 
-## Core Logic & Functionality Requirements
-1. Wrap browser automation calls in a retry decorator/context manager
-2. On failure: classify error type (crash vs timeout vs rate limit vs selector miss)
-3. For crashes: run light cleanup (clear profile cache), relaunch browser
-4. For timeouts: retry with increased wait time (exponential backoff)
-5. For rate limits: wait fixed delay (30-60s) and retry
-6. For selector misses: retry with fallback selectors before giving up
-7. Max retries configurable (default: 3)
-8. Report retry attempts to stdout for transparency
-9. After max retries: raise final error with full diagnostic context
+## Core Logic & Functionality
 
-## Implementation Requirements
-- **Technology:** Pure Python, no new dependencies; use existing patchright + config
-- **Integration Points:** SVC_AskQuestion wraps its main query loop with RetryHandler; SVC_BrowserSession exposes a `reset()` method for retry use
-- **Data Requirements:** Access to CONFIG_Settings timeouts; ability to call SVC_CleanupManager
-- **User Experience:** User sees retry attempt messages; no silent failures
+### Error Classification
+RetryHandler classifies failures into four categories:
 
-## Interface Definition (Planned)
+| Category | Detection | Action |
+|----------|-----------|--------|
+| **Timeout** | `TimeoutError` or "timeout" in message | Retry with exponential backoff |
+| **Rate limit** | "rate" / "quota" / "429" in message | Wait `RATE_LIMIT_DELAY` seconds, then retry |
+| **Selector miss** | `SelectorNotFoundError` or "selector" in message | Retry with exponential backoff |
+| **Non-retryable** | Auth errors, `KeyboardInterrupt`, `SystemExit` | Re-raise immediately, no retry |
+| **Generic crash** | Any other `Exception` | Retry with exponential backoff |
+
+### Retry Sequence
+1. Execute the wrapped block
+2. On exception: classify the error
+3. If non-retryable: re-raise immediately
+4. If retryable and attempts remaining: print attempt message, sleep (backoff or fixed delay), loop
+5. If retryable and max attempts exhausted: raise `RetryExhaustedError` with full diagnostic context
+6. On success: return normally
+
+### Backoff Formula
+```
+sleep_seconds = backoff_base ** attempt_number
+# attempt 1 → 2.0s, attempt 2 → 4.0s, attempt 3 → 8.0s
+```
+Rate-limit waits use `RATE_LIMIT_DELAY` (fixed, not exponential).
+
+### Output During Retry
+Each retry attempt prints:
+```
+⚠️  Attempt 1/3 failed: <error summary>
+⏳ Retrying in 2.0s...
+```
+Final failure prints:
+```
+❌ All 3 attempts failed. Last error: <error>
+```
+
+## Interface Definition
 
 ```python
+# scripts/retry_logic.py
+
+import time
+from contextlib import contextmanager
+from typing import Type, Tuple
+
+from config import MAX_RETRIES, RETRY_BACKOFF_BASE, RATE_LIMIT_DELAY
+
+
+class RetryExhaustedError(Exception):
+    """Raised when all retry attempts are exhausted."""
+    pass
+
+
+NON_RETRYABLE = (KeyboardInterrupt, SystemExit)
+RATE_LIMIT_SIGNALS = ("rate", "quota", "429", "too many")
+AUTH_SIGNALS = ("authentication", "not authenticated", "login required")
+
+
 class RetryHandler:
-    def __init__(self, max_retries: int = 3, backoff_base: float = 2.0)
+    def __init__(
+        self,
+        max_retries: int = MAX_RETRIES,
+        backoff_base: float = RETRY_BACKOFF_BASE,
+        rate_limit_delay: float = RATE_LIMIT_DELAY,
+    ):
+        self.max_retries = max_retries
+        self.backoff_base = backoff_base
+        self.rate_limit_delay = rate_limit_delay
 
     @contextmanager
-    def attempt(self, error_types: tuple = (Exception,)):
-        """Wrap a block with retry logic"""
+    def attempt(self):
+        """
+        Sync context manager. Wrap a block with retry logic.
+
+        Usage:
+            handler = RetryHandler()
+            for attempt in handler.attempt():
+                with attempt:
+                    result = do_browser_work()
+        """
         ...
 
-# Usage in SVC_AskQuestion:
-handler = RetryHandler(max_retries=3)
-with handler.attempt(error_types=(TimeoutError, SelectorNotFoundError)):
-    result = await query_notebooklm(page, question)
+
+# Intended usage in SVC_AskQuestion:
+#
+#   handler = RetryHandler()
+#   answer = None
+#   for attempt_ctx in handler.attempt():
+#       with attempt_ctx:
+#           answer = _run_browser_query(question, notebook_url, headless)
+#   return answer
 ```
+
+> **Implementation Note:** The interface above uses an iterator-of-context-managers pattern to support retry loops in synchronous code cleanly. Each `with attempt_ctx:` block either succeeds (breaking the loop) or raises (triggering retry). See Implementation Notes below for the recommended pattern.
 
 ## ARC Verification Criteria
 
 ### Functional Criteria
-- [ ] Retries up to max_retries on specified error types
-- [ ] Exponential backoff applied between retries
-- [ ] Browser session reset between retries on crash errors
-- [ ] Rate limit errors trigger appropriate fixed delay before retry
-- [ ] Raises final error after max_retries exhausted
+- [ ] Retries up to `max_retries` times on transient errors (TimeoutError, generic Exception)
+- [ ] Exponential backoff sleep applied between retries (`backoff_base ** attempt`)
+- [ ] Rate limit signals trigger `RATE_LIMIT_DELAY` fixed wait instead of backoff
+- [ ] Raises `RetryExhaustedError` after max attempts exhausted, preserving last exception
+- [ ] Returns normally (no exception) when wrapped block succeeds on any attempt
 
 ### Input Validation Criteria
-- [ ] max_retries=0 means no retries (immediate failure)
-- [ ] Accepts configurable error type tuple for targeted retry
+- [ ] `max_retries=0` → no retries; immediate `RetryExhaustedError` on first failure
+- [ ] `max_retries=1` → one attempt only; no retry sleep
+- [ ] Constructor defaults match CONFIG_Settings constants
 
 ### Error Handling Criteria
-- [ ] Does not retry on non-transient errors (e.g., authentication failure)
-- [ ] Full error context preserved in final exception for debugging
+- [ ] `KeyboardInterrupt` and `SystemExit` re-raised immediately (never retried)
+- [ ] Auth error signals ("not authenticated", "login required") re-raised immediately
+- [ ] `RetryExhaustedError` message includes attempt count and last error text
 
 ### Quality Criteria
-- [ ] Retry attempts logged to stdout with attempt number and error reason
-- [ ] No infinite loops possible (hard limit on retries)
-- [ ] Compatible with async context (works with patchright async API)
+- [ ] Each failed attempt prints attempt number, total attempts, error summary
+- [ ] No infinite loop possible — hard ceiling at `max_retries`
+- [ ] Pure Python stdlib — no new dependencies beyond `config.py`
+- [ ] Works with `sync_playwright` (synchronous, not async)
 
 ## Implementation Notes
-- Start with decorator pattern, migrate to context manager if async compatibility needed
-- Test with simulated failures (mock SVC_BrowserSession to raise on N-th call)
-- Rate limit detection requires parsing NotebookLM response content, not just HTTP status
+
+### Recommended Implementation Pattern
+The cleanest sync retry pattern for `ask_question.py` integration:
+
+```python
+class RetryHandler:
+    @contextmanager
+    def attempt(self):
+        last_error = None
+        for i in range(self.max_retries + 1):
+            try:
+                yield  # caller's block runs here
+                return  # success — exit
+            except NON_RETRYABLE:
+                raise
+            except Exception as e:
+                last_error = e
+                if i == self.max_retries:
+                    break
+                delay = self._classify_delay(e, i)
+                print(f"⚠️  Attempt {i+1}/{self.max_retries+1} failed: {e}")
+                print(f"⏳ Retrying in {delay:.1f}s...")
+                time.sleep(delay)
+        raise RetryExhaustedError(
+            f"All {self.max_retries+1} attempts failed. Last: {last_error}"
+        ) from last_error
+```
+
+> **Note:** A `@contextmanager` that `yield`s inside a loop and catches exceptions around the yield is the correct stdlib pattern for this use case. The `yield` transfers control to the `with` block; exceptions propagate back into the generator where they are caught.
+
+### Auth Error Detection
+Auth errors must not be retried. Detect via message content:
+```python
+msg = str(e).lower()
+if any(sig in msg for sig in AUTH_SIGNALS):
+    raise  # immediate re-raise
+```
+
+### Integration Point in ask_question.py
+The retry wraps the entire browser block (playwright start → context → navigate → query → extract):
+```python
+handler = RetryHandler()
+with handler.attempt():
+    playwright = sync_playwright().start()
+    # ... full query flow ...
+    answer = _extract_answer(page)
+```
+The `finally` block (context.close, playwright.stop) remains outside the retry wrapper to ensure cleanup always runs.
