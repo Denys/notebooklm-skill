@@ -16,36 +16,48 @@ Trigger when user:
 - Wants to add documentation to NotebookLM library
 - Uses phrases like "ask my NotebookLM", "check my docs", "query my notebook"
 
-## ⚠️ CRITICAL: Add Command - Smart Discovery
+## ⚠️ CRITICAL: Adding Notebooks — Auto-Add (Default)
 
-When user wants to add a notebook without providing details:
+**When the user shares a NotebookLM URL, ALWAYS use `auto_add.py` immediately — no questions asked.**
 
-**SMART ADD (Recommended)**: Query the notebook first to discover its content:
 ```bash
-# Step 1: Query the notebook about its content
-python scripts/run.py ask_question.py --question "What is the content of this notebook? What topics are covered? Provide a complete overview briefly and concisely" --notebook-url "[URL]"
+# Single command: discovers content and registers in one step
+py scripts/run.py auto_add.py --url "https://notebooklm.google.com/notebook/..."
 
-# Step 2: Use the discovered information to add it
-python scripts/run.py notebook_manager.py add --url "[URL]" --name "[Based on content]" --description "[Based on content]" --topics "[Based on content]"
+# Also set as active notebook immediately:
+py scripts/run.py auto_add.py --url "..." --activate
+
+# Re-discover and overwrite existing entry:
+py scripts/run.py auto_add.py --url "..." --force --activate
 ```
 
-**MANUAL ADD**: If user provides all details:
-- `--url` - The NotebookLM URL
-- `--name` - A descriptive name
-- `--description` - What the notebook contains (REQUIRED!)
-- `--topics` - Comma-separated topics (REQUIRED!)
+`auto_add.py` automatically:
+1. Opens the notebook in a browser session
+2. Queries it to extract name, description, and topics
+3. Registers it in the local library
+4. Reports the assigned ID
 
-NEVER guess or use generic descriptions! If details missing, use Smart Add to discover them.
+**MANUAL ADD** (only if auto_add fails):
+```bash
+py scripts/run.py notebook_manager.py add \
+  --url "https://notebooklm.google.com/notebook/..." \
+  --name "Descriptive Name" \
+  --description "What this notebook contains" \
+  --topics "topic1,topic2,topic3"
+```
+
+NEVER guess or use generic descriptions! Always auto-discover or ask the user.
 
 ## Critical: Always Use run.py Wrapper
 
-**NEVER call scripts directly. ALWAYS use `python scripts/run.py [script]`:**
+**NEVER call scripts directly. ALWAYS use `py scripts/run.py [script]`:**
 
 ```bash
-# ✅ CORRECT - Always use run.py:
-python scripts/run.py auth_manager.py status
-python scripts/run.py notebook_manager.py list
-python scripts/run.py ask_question.py --question "..."
+# ✅ CORRECT - Always use run.py (note: `py` not `python` on Windows):
+py scripts/run.py auth_manager.py status
+py scripts/run.py notebook_manager.py list
+py scripts/run.py ask_question.py --question "..."
+py scripts/run.py auto_add.py --url "..."
 
 # ❌ WRONG - Never call directly:
 python scripts/auth_manager.py status  # Fails without venv!

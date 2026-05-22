@@ -86,9 +86,13 @@ def main():
     # Build command
     cmd = [str(venv_python), str(script_path)] + script_args
 
+    # Ensure UTF-8 encoding on Windows (emoji support in scripts)
+    env = os.environ.copy()
+    env['PYTHONIOENCODING'] = 'utf-8'
+
     # Run the script
     try:
-        result = subprocess.run(cmd)
+        result = subprocess.run(cmd, env=env)
         sys.exit(result.returncode)
     except KeyboardInterrupt:
         print("\n⚠️ Interrupted by user")
